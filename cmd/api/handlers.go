@@ -4,6 +4,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
+
+	"github.com/golang-jwt/jwt/v4"
 )
 
 func (app *application) Home(w http.ResponseWriter, r *http.Request) {
@@ -88,4 +91,67 @@ func (app *application) authenticate(w http.ResponseWriter, r *http.Request) {
 
 	// w.Write([]byte(tokens.Token))
 	app.writeJSON(w, http.StatusAccepted, tokens)
+}
+
+func (app *application) refreshToken(w http.ResponseWriter, r *http.Request) {
+	// range throught all of the cookies send
+	// we sent the cookie as http cookie
+	// so javascript does not have access it
+	// every request made from user that has cookie will include that cookie
+	log.Println("In refresh")
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == app.auth.CookieName {
+			// refresh using that cookie
+			// take the refresh token embedded in that cookie
+			// validate it
+			// if it has an expired, we will issue new token
+
+			claims := &Claims{}
+			refreshToken := cookie.Value
+			log.Println(refreshToken)
+
+			// parse the token to get the claims
+			_, err := jwt.ParseWithClaims(refreshToken, claims, func(token *jwt.Token) (interface{}, error) {
+				return []byte(app.JWTSecret), nil
+			})
+
+			if err != nil {
+				app.errorJSON(w, errors.New("unauthorized"), http.StatusUnauthorized)
+				return
+			}
+
+			// get the user id from the token claims
+			// user id is in subject
+			userID, err := strconv.Atoi(claims.Subject)
+			log.Println(userID)
+			if err != nil {
+				app.errorJSON(w, errors.New("unknown user"), http.StatusUnauthorized)
+				return
+			}
+
+			user, err := app.DB.GetUserByID(userID)
+			log.Println(user)
+			if err != nil {
+				app.errorJSON(w, errors.New("unknown user"), http.StatusUnauthorized)
+				return
+			}
+
+			u := jwtUser{
+				ID:        user.ID,
+				FirstName: user.FirstName,
+				LastName:  user.LastName,
+			}
+
+			tokenPairs, err := app.auth.GenerateTokenPairs(&u)
+			if err != nil {
+				app.errorJSON(w, errors.New("error generating tokens"), http.StatusUnauthorized)
+				return
+			}
+
+			// send response and send new refresh token cookie
+			http.SetCookie(w, app.auth.GetRefreshCookie(tokenPairs.RefreshToken))
+
+			app.writeJSON(w, http.StatusOK, tokenPairs)
+		}
+	}
 }
